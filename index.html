@@ -233,6 +233,7 @@ const POLL_MS = (CFG.POLL_SECONDS || 20) * 1000;
 const TOKEN_KEY = 'cdc-noticket-session';
 
 const ROLE_NAME = {ops:'عمليات', insp:'مفتش', admin:'إدارة'};
+const ROLE_LABEL = {...ROLE_NAME, pending:'بانتظار الموافقة', rejected:'مرفوض'};
 const STATUS = {
   new:{t:'جديد',bg:'#FDECEA',fg:'#B3261E'},
   accepted:{t:'مستلم',bg:'#FFF4D6',fg:'#7A5300'},
@@ -274,7 +275,7 @@ function lsGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; 
 function lsSet(k,v){ try{ v==null ? localStorage.removeItem(k) : localStorage.setItem(k,v); }catch(e){} }
 
 /* ================= state ================= */
-const S = { token:null, user:null, cases:[], seen:new Set(), loaded:false, filter:'open', q:'', day:fmtD(Date.now()), dayData:null, users:null, photos:{}, lastSync:null, offline:false };
+const S = { tg:false, token:null, user:null, cases:[], seen:new Set(), loaded:false, filter:'open', q:'', day:fmtD(Date.now()), dayData:null, users:null, photos:{}, lastSync:null, offline:false };
 try { const s = JSON.parse(lsGet(TOKEN_KEY)||'null'); if(s){ S.token=s.token; S.user=s.user; } } catch(e){}
 
 /* ================= API ================= */
@@ -400,7 +401,7 @@ async function refresh(silent){
   try{
     const d = await api('board',{}, {silent});
     const fresh = d.cases.filter(c=>c.status==='new' && !S.seen.has(c.id));
-    S.cases = d.cases; S.lastSync = Date.now();
+    S.cases = d.cases; S.lastSync = Date.now(); S.tg = !!d.tg;
     if(S.loaded && fresh.length && S.user.role!=='ops'){ beep(); toast(`🔴 بلاغ جديد: ${fresh.map(c=>c.caseNo+' · '+c.bus).join('، ')}`, 5000); }
     d.cases.forEach(c=>S.seen.add(c.id)); S.loaded=true;
     if(current==='board' || current==='') { if(!silent || !document.querySelector('#modal .ov')) renderBoard(); }
@@ -517,7 +518,7 @@ function waUpdate(c, step){
 /* ================= actions ================= */
 function act(id, a, btn){
   const c = S.cases.find(x=>x.id===id); if(!c) return;
-  const step = (s) => run(btn, async()=>{ const n = await api('step',{id, step:s}); upsert(n); render(); waBox(waUpdate(n,s), `${n.caseNo} · ${STATUS[s].t}`); });
+  const step = (s) => run(btn, async()=>{ const n = await api('step',{id, step:s}); upsert(n); render(); notify(waUpdate(n,s), `${n.caseNo} · ${STATUS[s].t}`); });
   if(a==='accept') return step('accepted');
   if(a==='contacted') return step('contacted');
   if(a==='enroute') return step('enroute');
@@ -536,6 +537,10 @@ function modal(html, onMount, locked){
   onMount && onMount(ov);
 }
 function closeModal(){ $('#modal').innerHTML=''; }
+function notify(text, title){
+  if(S.tg){ toast(`✓ ${title} — تحدّثت بطاقة البلاغ في تلقرام`, 3000); return; }
+  waBox(text, title);
+}
 function waBox(text, title){
   modal(`<h3>رسالة جاهزة للقروب</h3><div class="sub">${esc(title)}: انسخها وأرسلها في قروب «مسارات»</div>
     <textarea class="wa" id="wa" readonly>${esc(text)}</textarea>
@@ -575,7 +580,7 @@ function arrivedBox(c){
     const ok=ov.querySelector('#ok');
     ok.onclick=()=>{
       if(!bucket.length && !ok.dataset.warned){ ok.dataset.warned=1; ok.textContent='المتابعة بدون صورة'; toast('يُفضَّل إرفاق صورة الحافلة'); return; }
-      run(ok, async()=>{ const n = await api('arrive',{id:c.id, photos:bucket}); upsert(n); closeModal(); render(); waBox(waUpdate(n,'arrived'), `${n.caseNo} · تم الوصول`); });
+      run(ok, async()=>{ const n = await api('arrive',{id:c.id, photos:bucket}); upsert(n); closeModal(); render(); notify(waUpdate(n,'arrived'), `${n.caseNo} · تم الوصول`); });
     };
   }, true);
 }
@@ -605,7 +610,7 @@ function closeBox(c, remote){
       const vno = ov.querySelector('#vno').value.trim();
       if(sel.has('fine') && !vno){ toast('أدخل رقم المخالفة'); ov.querySelector('#vno').focus(); return; }
       run(ok, async()=>{ const n = await api('close',{id:c.id, remote, outcomes:[...sel], violationNo:vno, passengers:+ov.querySelector('#pax').value||1, notes:ov.querySelector('#nt').value.trim(), photos:bucket});
-        upsert(n); closeModal(); render(); waBox(waUpdate(n,'closed'), `${n.caseNo} · مغلق`); });
+        upsert(n); closeModal(); render(); notify(waUpdate(n,'closed'), `${n.caseNo} · مغلق`); });
     };
   }, true);
 }
@@ -615,7 +620,7 @@ function cancelBox(c){
     <div class="row" style="margin-top:14px"><button class="btn pri" id="ok">تأكيد الإلغاء</button><button class="btn" data-x>رجوع</button></div>`,
   ov=>{ const ok=ov.querySelector('#ok'); ov.querySelector('#rs').focus();
     ok.onclick=()=>{ const r=ov.querySelector('#rs').value.trim(); if(!r) return toast('اكتب سبب الإلغاء');
-      run(ok, async()=>{ const n=await api('cancel',{id:c.id, reason:r}); upsert(n); closeModal(); render(); waBox(waUpdate(n,'cancelled'), `${n.caseNo} · ملغى`); }); }; });
+      run(ok, async()=>{ const n=await api('cancel',{id:c.id, reason:r}); upsert(n); closeModal(); render(); notify(waUpdate(n,'cancelled'), `${n.caseNo} · ملغى`); }); }; });
 }
 
 /* ================= new report ================= */
@@ -668,7 +673,7 @@ function renderNew(){
   $('#frm').onsubmit = e => {
     e.preventDefault(); const f = e.target.elements; const d = {}; for(const [k] of FIELDS) d[k]=f[k].value.trim();
     d.driverPhone = arDigits(d.driverPhone).replace(/\D/g,'').replace(/^(966|0)/,'');
-    run(e.target.querySelector('[type=submit]'), async()=>{ const c = await api('create',{case:d}); upsert(c); S.filter='open'; go('board'); waBox(waNew(c), `${c.caseNo} · بلاغ جديد`); });
+    run(e.target.querySelector('[type=submit]'), async()=>{ const c = await api('create',{case:d}); upsert(c); S.filter='open'; go('board'); notify(waNew(c), `${c.caseNo} · بلاغ جديد`); });
   };
 }
 
@@ -813,28 +818,39 @@ async function renderUsers(){
     try{ S.users = await api('users'); }catch(e){ $('#app').innerHTML=`<div class="empty">${esc(e.message)}</div>`; return; }
     if(current!=='users') return;
   }
-  const roleOrder={admin:0,ops:1,insp:2};
-  const L = S.users.slice().sort((a,b)=>(b.active-a.active)||(roleOrder[a.role]-roleOrder[b.role])||a.name.localeCompare(b.name,'ar'));
+  const roleOrder={pending:-1,admin:0,ops:1,insp:2,rejected:3};
+  const L = S.users.slice().sort((a,b)=>((roleOrder[a.role]??4)-(roleOrder[b.role]??4))||(b.active-a.active)||a.name.localeCompare(b.name,'ar'));
+  const nPend = L.filter(u=>u.role==='pending').length;
   $('#app').innerHTML = `
+    ${nPend?`<div class="warn" style="background:#FDECEA;border-radius:10px;padding:10px 14px;margin-bottom:12px">🆕 عندك ${nPend} طلب انضمام من تلقرام. اضغط «موافقة»، واختر الدور، وفعّل «الحساب نشط».</div>`:''}
     <div class="row" style="margin:6px 0 14px"><h2 class="sec" style="margin:0">المستخدمين</h2><div style="flex:1"></div><button class="btn pri" id="add">+ مستخدم جديد</button></div>
-    <div class="panel tw" style="padding:0"><table class="rtab"><thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>الرقم الوظيفي</th><th>الدور</th><th>الحالة</th><th>آخر دخول</th><th></th></tr></thead><tbody>
-      ${L.map(u=>`<tr><td><b>${esc(u.name)}</b></td><td class="num">${esc(u.username)}</td><td class="num">${esc(u.employeeId||'—')}</td><td>${ROLE_NAME[u.role]||esc(u.role)}</td>
-        <td>${u.active?(u.mustChange?'<span class="badge-off" style="background:#FFF4D6;color:#7A5300">بانتظار تغيير الرمز</span>':'<span class="badge-off" style="background:#E6F4EC;color:#2E7D5B">نشط</span>'):'<span class="badge-off">موقوف</span>'}</td>
-        <td class="num">${u.lastLogin?fmtDT(u.lastLogin).slice(0,16):'—'}</td><td><button class="btn sm" data-ed="${esc(u.username)}">تعديل</button></td></tr>`).join('')}
+    <div class="panel tw" style="padding:0"><table class="rtab"><thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>الرقم الوظيفي</th><th>الدور</th><th>تلقرام</th><th>الحالة</th><th>آخر دخول</th><th></th></tr></thead><tbody>
+      ${L.map(u=>`<tr><td><b>${esc(u.name)}</b></td><td class="num">${esc(u.username)}</td><td class="num">${esc(u.employeeId||'—')}</td><td>${ROLE_LABEL[u.role]||esc(u.role)}</td>
+        <td>${u.telegram?`<span class="badge-off" style="background:#E8F0FB;color:#1F5FA8">✓ ${esc(u.telegram)}</span>`:'<span class="hint">—</span>'}</td>
+        <td>${u.role==='pending'?'<span class="badge-off" style="background:#FDECEA;color:#B3261E">طلب انضمام</span>':u.active?(u.mustChange?'<span class="badge-off" style="background:#FFF4D6;color:#7A5300">بانتظار تغيير الرمز</span>':'<span class="badge-off" style="background:#E6F4EC;color:#2E7D5B">نشط</span>'):'<span class="badge-off">موقوف</span>'}</td>
+        <td class="num">${u.lastLogin?fmtDT(u.lastLogin).slice(0,16):'—'}</td><td style="white-space:nowrap"><button class="btn sm" data-ed="${esc(u.username)}">${u.role==='pending'?'موافقة':'تعديل'}</button> <button class="btn sm ghost" data-tl="${esc(u.username)}" title="رابط ربط حساب تلقرام">ربط تلقرام</button></td></tr>`).join('')}
     </tbody></table></div>
     <p class="hint">• الأدوار: <b>عمليات</b> تسجّل البلاغات وتلغيها · <b>مفتش</b> يستلم ويعالج ويغلق · <b>إدارة</b> كل الصلاحيات وإدارة المستخدمين.<br>• عند إنشاء مستخدم أو إعادة تعيين رمزه، يُطلب منه تغيير الرمز عند أول دخول.<br>• لإيقاف موظف انتقل أو ترك العمل: «تعديل» ← إلغاء «نشط». سجلاته السابقة تبقى محفوظة.</p>`;
   $('#add').onclick=()=>userBox(null);
   $('#app').querySelectorAll('[data-ed]').forEach(b=>b.onclick=()=>userBox(S.users.find(u=>u.username===b.dataset.ed)));
+  $('#app').querySelectorAll('[data-tl]').forEach(b=>b.onclick=()=>run(b, async()=>{ const u=S.users.find(x=>x.username===b.dataset.tl); const d=await api('tgLink',{username:u.username}); tgLinkBox(u, d); }));
+}
+function tgLinkBox(u, d){
+  modal(`<h3>ربط تلقرام: ${esc(u.name)}</h3><div class="sub">أرسل الرابط لـ ${esc(u.name)}، أو افتحه أنت لو هو حسابك. يفتح البوت ويضغط <b>Start</b>، والربط يتم تلقائياً. الرابط صالح ${d.hours} ساعات ولمرة وحدة.</div>
+    <textarea class="wa" id="wa" readonly style="min-height:70px;direction:ltr;text-align:left">${esc(d.url)}</textarea>
+    <div class="row" style="margin-top:12px"><button class="btn pri" id="cp">نسخ الرابط</button><a class="btn" href="${esc(d.url)}" target="_blank" rel="noopener">فتح في تلقرام</a><button class="btn" data-x>تم</button></div>`,
+  ov=>{ ov.querySelector('#cp').onclick=async()=>{ const ta=ov.querySelector('#wa'); try{ await navigator.clipboard.writeText(ta.value); toast('تم النسخ ✓'); }catch(e){ ta.select(); toast('انسخ الرابط يدوياً'); } }; });
 }
 function userBox(u){
-  const isNew = !u; u = u || {username:'',name:'',employeeId:'',role:'insp',active:true};
-  modal(`<h3>${isNew?'مستخدم جديد':'تعديل: '+esc(u.name)}</h3><div class="sub">${isNew?'أعطِ الموظف اسم المستخدم والرمز المؤقت، وسيغيّره عند أول دخول.':'اترك الرمز فارغاً للإبقاء عليه.'}</div>
+  const isNew = !u; u = u ? {...u} : {username:'',name:'',employeeId:'',role:'insp',active:true};
+  const pend = u.role==='pending' || u.role==='rejected'; if(pend){ u.role='insp'; u.active=true; }
+  modal(`<h3>${isNew?'مستخدم جديد':'تعديل: '+esc(u.name)}</h3><div class="sub">${isNew?'أعطِ الموظف اسم المستخدم والرمز المؤقت، وسيغيّره عند أول دخول.':pend?'طلب انضمام من تلقرام: اختر الدور واحفظ. الموظف ما يحتاج رمز إلا إذا بيستخدم الموقع.':'اترك الرمز فارغاً للإبقاء عليه.'}</div>
     <form id="uf"><div class="grid2">
       <label class="f">الاسم<input name="name" value="${esc(u.name)}" required></label>
       <label class="f">الرقم الوظيفي<input name="employee_id" value="${esc(u.employeeId)}" dir="ltr"></label>
       <label class="f">اسم المستخدم (إنجليزي)<input name="username" value="${esc(u.username)}" ${isNew?'':'readonly'} dir="ltr" autocapitalize="none" placeholder="مثال: f.alotaibi" required></label>
       <label class="f">الدور<select name="role">${Object.entries(ROLE_NAME).map(([k,t])=>`<option value="${k}" ${u.role===k?'selected':''}>${t}</option>`).join('')}</select></label>
-      <label class="f">${isNew?'رمز مؤقت (4–8 أرقام)':'رمز جديد (اختياري)'}<input name="pin" inputmode="numeric" dir="ltr" ${isNew?'required':''} placeholder="${isNew?'مثال: 4821':'إعادة تعيين الرمز'}"></label>
+      <label class="f">${isNew?'رمز مؤقت (4–8 أرقام)':'رمز دخول الموقع (اختياري)'}<input name="pin" inputmode="numeric" dir="ltr" ${isNew?'required':''} placeholder="${isNew?'مثال: 4821':u.hasPin?'إعادة تعيين الرمز':'بدون رمز = تلقرام فقط'}"></label>
       <label class="opt" style="align-self:end;margin:0"><input type="checkbox" name="active" ${u.active?'checked':''}> الحساب نشط</label>
     </div>
     <div class="row" style="margin-top:14px"><button class="btn pri" type="submit">حفظ</button><button class="btn" type="button" data-x>إلغاء</button></div></form>`,
