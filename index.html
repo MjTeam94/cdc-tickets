@@ -240,6 +240,8 @@ const STATUS = {
   contacted:{t:'تم التواصل',bg:'#E8F0FB',fg:'#1F5FA8'},
   enroute:{t:'في الطريق',bg:'#EDE7F6',fg:'#5B2C91'},
   arrived:{t:'تم الوصول',bg:'#E6F4EC',fg:'#2E7D5B'},
+  patrol_called:{t:'بانتظار الدوريات',bg:'#FDECEA',fg:'#8A1C14'},
+  patrol_arrived:{t:'وصلت الدوريات',bg:'#E3EEFA',fg:'#163E6E'},
   closed:{t:'مغلق',bg:'#EEF0F3',fg:'#4B5160'},
   cancelled:{t:'ملغى',bg:'#F3F4F6',fg:'#9CA3AF'}
 };
@@ -253,8 +255,13 @@ const OUTCOMES = [
   {k:'fine',   t:'تحرير مخالفة', s:'مخالفة', c:'#B3261E'},
   {k:'bought', t:'شراء تذكرة / حل ودي', s:'شراء تذكرة', c:'#1F5FA8'},
   {k:'left',   t:'نزل الراكب قبل وصول المفتش', s:'نزل قبل الوصول', c:'#6B7280'},
-  {k:'false',  t:'بلاغ غير صحيح', s:'بلاغ غير صحيح', c:'#9CA3AF'}
+  {k:'false',  t:'بلاغ غير صحيح', s:'بلاغ غير صحيح', c:'#9CA3AF'},
+  {k:'left_patrol', t:'نزل الراكب قبل وصول الدوريات الأمنية', s:'نزل قبل الدوريات', c:'#7C5C2E'},
+  {k:'nocoop', t:'عدم تعاون الدوريات الأمنية', s:'عدم تعاون الدوريات', c:'#4A1D5E'}
 ];
+const BASE_OUT = ['offload','fine','valid','bought','left','false'];
+function allowedOuts(c, remote){ if(remote) return REMOTE_OK.slice(); const a=BASE_OUT.slice(); if(c.status==='patrol_called') a.push('left_patrol'); if(c.status==='patrol_arrived') a.push('nocoop'); return a; }
+const ON_SITE = ['arrived','patrol_called','patrol_arrived'];
 const REMOTE_OK = ['valid','left','false','bought'];
 const OUT = Object.fromEntries(OUTCOMES.map(o=>[o.k,o]));
 
@@ -427,7 +434,7 @@ function renderBoard(){
   if(S.filter==='mine') list = list.filter(c=>(c.inspector && c.inspector.username===S.user.username) || c.opsUser===S.user.username);
   const q = (S.q||'').trim().toLowerCase();
   if(q) list = list.filter(c=>[c.caseNo,c.bus,c.route,c.dest,c.driverId,c.inspector?.name].join(' ').toLowerCase().includes(q));
-  const order = {new:0,accepted:1,contacted:2,enroute:3,arrived:4,closed:5,cancelled:6};
+  const order = {new:0,accepted:1,contacted:2,enroute:3,arrived:4,patrol_called:5,patrol_arrived:6,closed:7,cancelled:8};
   list.sort((a,b)=> (!isOpen(a))-(!isOpen(b)) || (!isOpen(a) ? (b.times.closed||0)-(a.times.closed||0) : order[a.status]-order[b.status] || a.times.requested-b.times.requested));
 
   $('#app').innerHTML = `
@@ -457,13 +464,23 @@ function card(c){
   const u = S.user, adm = u.role==='admin';
   const mine = adm || (c.inspector && c.inspector.username===u.username);
   const A = [];
+  const tp = c.transferPending;
   if(c.status==='new' && (u.role==='insp'||adm)) A.push(`<button class="btn pri" data-act="accept" data-id="${c.id}">استلام البلاغ</button>`);
-  if(mine){
+  if(tp && isOpen(c)){
+    if(tp.to===u.username) A.push(`<button class="btn pri" data-act="tAccept" data-id="${c.id}">✅ قبول التحويل</button><button class="btn" data-act="tDecline" data-id="${c.id}">رفض</button>`);
+    else if(!tp.to && (u.role==='insp'||adm) && !(c.inspector && c.inspector.username===u.username)) A.push(`<button class="btn pri" data-act="tAccept" data-id="${c.id}">✋ أنا أقرب: استلام</button>`);
+    if(mine) A.push(`<button class="btn" data-act="tCancel" data-id="${c.id}">إلغاء التحويل</button>`);
+  } else if(mine){
     if(c.status==='accepted') A.push(`<button class="btn pri" data-act="contacted" data-id="${c.id}">تم التواصل مع السائق</button>`);
     if(c.status==='contacted') A.push(`<button class="btn pri" data-act="enroute" data-id="${c.id}">التوجه للموقع</button>`);
     if(['accepted','contacted'].includes(c.status)) A.push(`<button class="btn" data-act="closeRemote" data-id="${c.id}">إغلاق بدون توجه</button>`);
     if(c.status==='enroute') A.push(`<button class="btn pri" data-act="arrived" data-id="${c.id}">تم الوصول + صورة</button>`);
-    if(c.status==='arrived' || (adm && ['enroute'].includes(c.status))) A.push(`<button class="btn pri" data-act="close" data-id="${c.id}">إغلاق الحالة</button>`);
+    if(c.status==='patrol_called') A.push(`<button class="btn pri" data-act="pArr" data-id="${c.id}">🚓 وصلت الدوريات</button><button class="btn" data-act="closeLeftP" data-id="${c.id}">🏃 نزل الراكب قبل وصول الدوريات</button>`);
+    if(ON_SITE.includes(c.status) || (adm && ['enroute'].includes(c.status))) A.push(`<button class="btn ${c.status==='patrol_called'?'':'pri'}" data-act="close" data-id="${c.id}">إغلاق الحالة</button>`);
+    if(c.status==='arrived') A.push(`<button class="btn" data-act="pCall" data-id="${c.id}">🚨 استدعاء الدوريات الأمنية</button>`);
+    if(c.status==='patrol_arrived') A.push(`<button class="btn danger" data-act="closeNoCoop" data-id="${c.id}">⚠️ عدم تعاون الدوريات</button>`);
+    if(c.times.patrol_called) A.push(`<button class="btn" data-act="police" data-id="${c.id}">🚔 ${c.policeNo?'تعديل ':''}رقم بلاغ الشرطة</button>`);
+    if(['accepted','contacted','enroute'].concat(ON_SITE).includes(c.status)) A.push(`<button class="btn" data-act="transfer" data-id="${c.id}">🔁 تحويل</button>`);
   }
   A.push(`<button class="btn ghost" data-go="case-${c.id}">التقرير</button>`);
   if(isOpen(c) && (u.role==='ops'||adm)) A.push(`<button class="btn sm danger" data-act="cancel" data-id="${c.id}" style="margin-inline-start:auto">إلغاء</button>`);
@@ -479,6 +496,9 @@ function card(c){
       <div><span class="k">المفتش</span>${c.inspector?esc(c.inspector.name):(c.status==='cancelled'?'—':'<span style="color:var(--bad)">لم يُستلم بعد</span>')}</div>
       ${c.stationUrl?`<div class="full"><span class="k">موقع المحطة</span><a href="${esc(c.stationUrl)}" target="_blank" rel="noopener">${esc(c.stationName||c.dest)} ↗</a></div>`:''}
       ${c.status==='cancelled'&&c.cancelReason?`<div class="full"><span class="k">سبب الإلغاء</span>${esc(c.cancelReason)}</div>`:''}
+      ${c.policeNo?`<div class="full"><span class="k">رقم بلاغ الشرطة</span><b class="num">${esc(c.policeNo)}</b></div>`:''}
+      ${(c.transfers||[]).length?`<div class="full"><span class="k">سجل التحويل</span>${c.transfers.map(esc).join('<br>')}</div>`:''}
+      ${tp && isOpen(c)?`<div class="full" style="background:#FFF4D6;border-radius:8px;padding:6px 9px"><b>🔁 ${tp.to?`تحويل معلّق إلى ${esc(tp.toName)}، بانتظار قبوله`:'مطلوب مفتش أقرب، أول من يستلم تصير الحالة له'}</b> <span class="hint">(طلب ${esc(tp.fromName)})</span></div>`:''}
     </div>
     ${outBadges(c)}
     <div class="acts">${A.join('')}</div>
@@ -499,8 +519,8 @@ function waNew(c){
 وقت البلاغ: ${fmtT(c.times.requested)}`;
 }
 function waUpdate(c, step){
-  const icon = {accepted:'🟡',contacted:'🔵',enroute:'🟣',arrived:'🟢',closed:'✅',cancelled:'⚪'}[step] || '•';
-  const label = {accepted:'تم الاستلام',contacted:'تم التواصل مع السائق',enroute:'المفتش في الطريق',arrived:'تم الوصول',closed: c.remote?'تم الإغلاق (عن بُعد)':'تم الإغلاق',cancelled:'تم إلغاء البلاغ'}[step];
+  const icon = {accepted:'🟡',contacted:'🔵',enroute:'🟣',arrived:'🟢',patrol_called:'🚨',patrol_arrived:'🚓',closed:'✅',cancelled:'⚪'}[step] || '•';
+  const label = {accepted:'تم الاستلام',contacted:'تم التواصل مع السائق',enroute:'المفتش في الطريق',arrived:'تم الوصول',patrol_called:'تم استدعاء الدوريات الأمنية',patrol_arrived:'وصلت الدوريات الأمنية',closed: c.remote?'تم الإغلاق (عن بُعد)':'تم الإغلاق',cancelled:'تم إلغاء البلاغ'}[step];
   let m = `${icon} ${c.caseNo} | ${label}
 الحافلة: ${c.bus} | المسار: ${c.route}`;
   if(step==='cancelled') return m + `\nالسبب: ${c.cancelReason}`;
@@ -522,10 +542,50 @@ function act(id, a, btn){
   if(a==='accept') return step('accepted');
   if(a==='contacted') return step('contacted');
   if(a==='enroute') return step('enroute');
+  if(a==='pCall') return step('patrol_called');
+  if(a==='pArr') return step('patrol_arrived');
+  if(a==='closeLeftP') return closeBox(c,false,['left_patrol']);
+  if(a==='closeNoCoop') return closeBox(c,false,['nocoop']);
   if(a==='arrived') return arrivedBox(c);
   if(a==='close') return closeBox(c,false);
   if(a==='closeRemote') return closeBox(c,true);
   if(a==='cancel') return cancelBox(c);
+  if(a==='transfer') return transferBox(c);
+  if(a==='police') return policeBox(c);
+  const tAct = {tAccept:['transferAccept','✅ الحالة صارت معك'], tDecline:['transferDecline','تم رفض التحويل'], tCancel:['transferCancel','تم إلغاء التحويل']}[a];
+  if(tAct) return run(btn, async()=>{ const n = await api(tAct[0],{id}); upsert(n); render(); toast(tAct[1]); });
+}
+function policeBox(c){
+  modal(`<h3>${esc(c.caseNo)} · رقم بلاغ الشرطة</h3><div class="sub">الصق رسالة الشرطة زي ما هي، والنظام ياخذ الرقم اللي بين القوسين.</div>
+    <textarea class="paste" id="pm" style="min-height:90px" placeholder="بلاغكم (د8481343) محل اهتمامنا وجاري معالجته من الجهة المختصة ."></textarea>
+    <div class="parsed" id="pv" style="margin-top:6px"></div>
+    <div class="row" style="margin-top:12px"><button class="btn pri" id="ok">حفظ</button><button class="btn" data-x>إلغاء</button></div>`,
+  ov=>{ const ta=ov.querySelector('#pm'), pv=ov.querySelector('#pv'), ok=ov.querySelector('#ok'); ta.focus();
+    const parse=v=>{ const t=arDigits(v).replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,''); const m=t.match(/[(\[﴿（]\s*([^)\]﴾）]+?)\s*[)\]﴾）]/); return m?m[1].replace(/\s+/g,''):(/^[\u0600-\u06FFA-Za-z]{0,3}\d{4,15}$/.test(t.trim().replace(/\s+/g,''))?t.trim().replace(/\s+/g,''):''); };
+    ta.oninput=()=>{ const n=parse(ta.value); pv.textContent = n?`✓ رقم البلاغ: ${n}`:(ta.value.trim()?'لم يتم العثور على رقم بين قوسين':''); pv.style.color = n?'':'var(--bad)'; };
+    ok.onclick=()=>{ if(!parse(ta.value)) return toast('الصق رسالة الشرطة اللي فيها الرقم بين قوسين');
+      run(ok, async()=>{ const n=await api('policeNo',{id:c.id, text:ta.value}); upsert(n); closeModal(); render(); toast('🚔 تم حفظ رقم بلاغ الشرطة: '+n.policeNo); }); }; });
+}
+async function transferBox(c){
+  let list;
+  try{ list = S.insp = S.insp || await api('inspectors'); }catch(e){ return toast('⚠️ '+e.message); }
+  list = list.filter(x=>!(c.inspector && x.username===c.inspector.username));
+  const adm = S.user.role==='admin';
+  modal(`<h3>${esc(c.caseNo)} · تحويل الحالة</h3><div class="sub">الحالة الحين مع <b>${esc(c.inspector?c.inspector.name:'—')}</b>. اختر المفتش الأقرب للموقع.</div>
+    <div id="tl">
+      <label class="opt on"><input type="radio" name="to" value="" checked> 📢 <b>أي مفتش أقرب</b> <span class="hint">(أول من يستلم)</span></label>
+      ${list.map(x=>`<label class="opt"><input type="radio" name="to" value="${esc(x.username)}"> 👮 ${esc(x.name)} ${x.employeeId?`<span class="hint num">${esc(x.employeeId)}</span>`:''}</label>`).join('')}
+    </div>
+    ${adm?`<label class="opt" style="margin-top:10px;background:#F5EFF8"><input type="checkbox" id="direct"> تعيين مباشر بدون انتظار قبول المفتش (للإدارة)</label>`:''}
+    <p class="hint">المفتش المختار يوصله إشعار، والحالة ما تنتقل له إلا بعد ما يضغط «قبول التحويل».</p>
+    <div class="row" style="margin-top:12px"><button class="btn pri" id="ok">إرسال طلب التحويل</button><button class="btn" data-x>إلغاء</button></div>`,
+  ov=>{
+    ov.querySelectorAll('#tl input').forEach(i=>i.onchange=()=>ov.querySelectorAll('#tl .opt').forEach(l=>l.classList.toggle('on', l.querySelector('input').checked)));
+    const ok=ov.querySelector('#ok');
+    ok.onclick=()=>{ const to=ov.querySelector('#tl input:checked').value; const direct=!!(ov.querySelector('#direct')&&ov.querySelector('#direct').checked);
+      if(direct && !to) return toast('للتعيين المباشر اختر مفتش محدد');
+      run(ok, async()=>{ const n=await api('transfer',{id:c.id, to, direct}); upsert(n); closeModal(); render(); toast(direct?'✅ تم تعيين الحالة':'🔁 تم إرسال طلب التحويل'); }); };
+  });
 }
 
 /* ================= modals ================= */
@@ -584,19 +644,19 @@ function arrivedBox(c){
     };
   }, true);
 }
-function closeBox(c, remote){
-  const bucket = []; const sel = new Set();
-  const opts = remote ? OUTCOMES.filter(o=>REMOTE_OK.includes(o.k)) : OUTCOMES;
+function closeBox(c, remote, pre=[]){
+  const bucket = []; const sel = new Set(pre);
+  const allow = allowedOuts(c, remote); const opts = OUTCOMES.filter(o=>allow.includes(o.k));
   modal(`<h3>${esc(c.caseNo)} · ${remote?'إغلاق بدون توجه للموقع':'إغلاق الحالة'}</h3>
     <div class="sub">${remote?'انحلت الحالة بالتواصل مع السائق':'كيف تم التعامل مع الحالة؟'} (يمكن اختيار أكثر من نتيجة)</div>
-    <div id="opts">${opts.map(o=>`<label class="opt"><input type="checkbox" value="${o.k}"> <span style="width:10px;height:10px;border-radius:2px;background:${o.c}"></span>${o.t}</label>`).join('')}</div>
+    <div id="opts">${opts.map(o=>`<label class="opt ${sel.has(o.k)?'on':''}"><input type="checkbox" value="${o.k}" ${sel.has(o.k)?'checked':''}> <span style="width:10px;height:10px;border-radius:2px;background:${o.c}"></span>${o.t}</label>`).join('')}</div>
     <div class="grid2" style="margin-top:10px">
       <label class="f" id="vbox" style="display:none">رقم المخالفة<input id="vno" placeholder="رقم المخالفة" dir="ltr"></label>
       <label class="f">عدد الركاب<input id="pax" type="number" min="1" value="${c.passengers||1}"></label>
     </div>
     <label class="f" style="margin-top:10px">ملاحظات المفتش<textarea id="nt" rows="3" placeholder="وصف مختصر لما حدث"></textarea></label>
     ${remote?'':`<label class="drop" style="margin-top:10px">📎 صور إضافية (المخالفة، التذكرة…)<input type="file" id="ph" accept="image/*" multiple hidden></label><div class="thumbs" id="th"></div>`}
-    <div class="row" style="margin-top:14px"><button class="btn pri" id="ok" disabled>إغلاق الحالة</button><button class="btn" data-x>إلغاء</button></div>`,
+    <div class="row" style="margin-top:14px"><button class="btn pri" id="ok" ${sel.size?'':'disabled'}>إغلاق الحالة</button><button class="btn" data-x>إلغاء</button></div>`,
   ov=>{
     if(!remote) photoPicker(ov, bucket);
     const ok = ov.querySelector('#ok');
@@ -700,9 +760,10 @@ async function renderCaseReport(id){
     try{ c = await api('getCase',{id}); }catch(e){ $('#app').innerHTML=`<div class="empty">${esc(e.message)}</div>`; return; }
     if(current!=='case-'+id) return; }
   const t = c.times;
-  const tl = STEPS.map(([k,l],i)=>{
-    const skip = c.remote && (k==='enroute'||k==='arrived');
-    const prev = STEPS.slice(0,i).map(s=>t[s[0]]).filter(Boolean).pop();
+  const RS = STEPS.slice(0,5).concat(t.patrol_called?[['patrol_called','استدعاء الدوريات']]:[]).concat(t.patrol_arrived||t.patrol_called?[['patrol_arrived','وصول الدوريات']]:[]).concat([STEPS[5]]);
+  const tl = RS.map(([k,l],i)=>{
+    const skip = (c.remote && (k==='enroute'||k==='arrived')) || (k==='patrol_arrived' && !t.patrol_arrived && !isOpen(c));
+    const prev = RS.slice(0,i).map(s=>t[s[0]]).filter(Boolean).pop();
     const d = (t[k] && prev) ? `بعد ${fmtDur(mins(prev,t[k]))}` : '';
     return `<div class="s ${(i===0||k==='closed')&&t[k]?'end':''} ${skip?'skip':''}"><span class="dot"></span>
       <div class="lb">${l}</div><div class="tm num">${skip?'لم يتطلب':(t[k]?fmtDT(t[k]):'—')}</div><div class="du">${d}</div></div>`;
@@ -735,10 +796,12 @@ async function renderCaseReport(id){
     <div class="narr">
       <div class="k">طريقة التعامل</div><div class="v">${esc(outTxt)}</div>
       <div class="k">ملاحظات المفتش</div><div class="v">${esc(c.notes||'-')}</div>
+      ${(c.transfers||[]).length?`<div class="k">سجل التحويل</div><div class="v">${c.transfers.map(esc).join('<br>')}</div>`:''}
+      ${t.patrol_called?`<div class="k">الدوريات الأمنية</div><div class="v">${c.policeNo?`رقم بلاغ الشرطة: <b class="num">${esc(c.policeNo)}</b> · `:''}الاستدعاء: <b>${fmtT(t.patrol_called)}</b> · الوصول: <b>${t.patrol_arrived?fmtT(t.patrol_arrived)+' (بعد '+fmtDur(mins(t.patrol_called,t.patrol_arrived))+')':'لم تصل'}</b>${c.outcomes.includes('nocoop')?' · <b style="color:var(--bad)">عدم تعاون الدوريات</b>':''}</div>`:''}
       <div class="k">مدة الحالة</div><div class="v">من البلاغ للاستلام: <b>${fmtDur(mins(t.requested,t.accepted))}</b> · من البلاغ للوصول: <b>${c.remote?'لم يتطلب':fmtDur(mins(t.requested,t.arrived))}</b> · الإجمالي: <b>${fmtDur(mins(t.requested,t.closed))}</b></div>
     </div>
     <div class="rs">الخط الزمني</div>
-    <div class="tl">${tl}</div>
+    <div class="tl" style="grid-template-columns:repeat(${RS.length},1fr)">${tl}</div>
     ${c.photos.length?`<div class="rs">الصور</div><div class="photos">${c.photos.map(p=>`<figure>${S.photos[p.id]?`<img src="${S.photos[p.id]}" alt="">`:`<div class="ph-ph" data-pid="${esc(p.id)}">جارِ تحميل الصورة…</div>`}<figcaption>${esc(p.name)}</figcaption></figure>`).join('')}</div>`:''}
     <div class="foot"><span>MBCO · العمليات CDC</span><span>${esc(c.caseNo)} · ${fmtD(t.requested)}</span></div>
   </div>`;
@@ -785,7 +848,12 @@ async function renderDaily(){
       <div><div class="k">متوسط مدة الحالة</div><div class="v" style="font-size:19px">${fmtDur(aCls)}</div></div>
       <div><div class="k">عدد الركاب</div><div class="v">${closed.reduce((s,c)=>s+(c.passengers||1),0)}</div></div>
     </div>
-    ${cancelled?`<p class="hint" style="margin:8px 4px 0">بلاغات ملغاة (غير محتسبة): ${cancelled}</p>`:''}
+    ${(cancelled||L.some(c=>(c.transfers||[]).length))?`<p class="hint" style="margin:8px 4px 0">${L.filter(c=>(c.transfers||[]).length).length?`حالات محوّلة لمفتش أقرب: <b>${L.filter(c=>(c.transfers||[]).length).length}</b>`:''}${cancelled?` · بلاغات ملغاة (غير محتسبة): ${cancelled}`:''}</p>`:''}
+    ${L.some(c=>c.times.patrol_called)?`<div class="kpis" style="margin-top:8px;grid-template-columns:repeat(3,1fr)">
+      <div><div class="k">🚨 استدعاء الدوريات</div><div class="v">${L.filter(c=>c.times.patrol_called).length}</div></div>
+      <div><div class="k">متوسط وصول الدوريات</div><div class="v" style="font-size:19px">${fmtDur(avg(L.map(c=>mins(c.times.patrol_called,c.times.patrol_arrived))))}</div></div>
+      <div><div class="k">عدم تعاون الدوريات</div><div class="v" style="color:var(--bad)">${L.filter(c=>c.outcomes.includes('nocoop')).length}</div></div>
+    </div>`:''}
     <div class="rs">النتائج</div>
     ${outCounts.map(({o,n})=>`<div class="pb"><div class="n">${o.s}</div><div class="track"><div class="fill" style="width:${n/maxO*100}%;background:${o.c}"></div></div><div class="pc num">${n}</div></div>`).join('')}
     <div class="rs">حسب المسار والمفتش</div>
