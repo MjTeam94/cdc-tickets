@@ -257,8 +257,12 @@ const OUTCOMES = [
   {k:'left',   t:'نزل الراكب قبل وصول المفتش', s:'نزل قبل الوصول', c:'#6B7280'},
   {k:'false',  t:'بلاغ غير صحيح', s:'بلاغ غير صحيح', c:'#9CA3AF'},
   {k:'left_patrol', t:'نزل الراكب قبل وصول الدوريات الأمنية', s:'نزل قبل الدوريات', c:'#7C5C2E'},
-  {k:'nocoop', t:'عدم تعاون الدوريات الأمنية', s:'عدم تعاون الدوريات', c:'#4A1D5E'}
+  {k:'nocoop', t:'عدم تعاون الدوريات الأمنية', s:'عدم تعاون الدوريات', c:'#4A1D5E'},
+  {k:'unreachable', t:'تعذر التواصل مع السائق', s:'تعذر التواصل', c:'#9A3412'},
+  {k:'not_taken', t:'أُغلق دون استلام', s:'دون استلام', c:'#374151'}
 ];
+const NX_REASONS = {time:'تجاوز الوقت دون استلام', shift:'تبديل الشفت', other:'سبب آخر'};
+const UC_REASONS = {off:'الجوال مغلق', noans:'لا يجيب', wrong:'رقم خطأ'};
 const BASE_OUT = ['offload','fine','valid','bought','left','false'];
 function allowedOuts(c, remote){ if(remote) return REMOTE_OK.slice(); const a=BASE_OUT.slice(); if(c.status==='patrol_called') a.push('left_patrol'); if(c.status==='patrol_arrived') a.push('nocoop'); return a; }
 const ON_SITE = ['arrived','patrol_called','patrol_arrived'];
@@ -466,12 +470,13 @@ function card(c){
   const A = [];
   const tp = c.transferPending;
   if(c.status==='new' && (u.role==='insp'||adm)) A.push(`<button class="btn pri" data-act="accept" data-id="${c.id}">استلام البلاغ</button>`);
+  if(c.status==='new' && adm) A.push(`<button class="btn" data-act="nx" data-id="${c.id}">🗃 إغلاق دون استلام</button>`);
   if(tp && isOpen(c)){
     if(tp.to===u.username) A.push(`<button class="btn pri" data-act="tAccept" data-id="${c.id}">✅ قبول التحويل</button><button class="btn" data-act="tDecline" data-id="${c.id}">رفض</button>`);
     else if(!tp.to && (u.role==='insp'||adm) && !(c.inspector && c.inspector.username===u.username)) A.push(`<button class="btn pri" data-act="tAccept" data-id="${c.id}">✋ أنا أقرب: استلام</button>`);
     if(mine) A.push(`<button class="btn" data-act="tCancel" data-id="${c.id}">إلغاء التحويل</button>`);
   } else if(mine){
-    if(c.status==='accepted') A.push(`<button class="btn pri" data-act="contacted" data-id="${c.id}">تم التواصل مع السائق</button>`);
+    if(c.status==='accepted') A.push(`<button class="btn pri" data-act="contacted" data-id="${c.id}">تم التواصل مع السائق</button><button class="btn" data-act="uc" data-id="${c.id}">📵 تعذر التواصل</button>`);
     if(c.status==='contacted') A.push(`<button class="btn pri" data-act="enroute" data-id="${c.id}">التوجه للموقع</button>`);
     if(['accepted','contacted'].includes(c.status)) A.push(`<button class="btn" data-act="closeRemote" data-id="${c.id}">إغلاق بدون توجه</button>`);
     if(c.status==='enroute') A.push(`<button class="btn pri" data-act="arrived" data-id="${c.id}">تم الوصول + صورة</button>`);
@@ -486,11 +491,11 @@ function card(c){
   if(isOpen(c) && (u.role==='ops'||adm)) A.push(`<button class="btn sm danger" data-act="cancel" data-id="${c.id}" style="margin-inline-start:auto">إلغاء</button>`);
   const phone = c.driverPhone ? `0${c.driverPhone}` : '';
   return `<div class="cc ${c.status==='new'?'new':''}">
-    <div class="cc-h"><span class="cid">${esc(c.caseNo)}</span>${stChip(c.status)}${c.remote&&c.status==='closed'?'<span class="badge-off">عن بُعد</span>':''}<span class="elapsed">${el}</span></div>
+    <div class="cc-h"><span class="cid">${esc(c.caseNo)}</span>${stChip(c.status)}${c.isTest?'<span class="badge-off" style="background:#FFF4D6;color:#7A5300">🧪 تجريبي</span>':''}${(c.source||'').startsWith('CDC')?'<span class="badge-off" title="من تطبيق عمليات CDC">📲 CDC</span>':''}${c.remote&&c.status==='closed'?'<span class="badge-off">عن بُعد</span>':''}<span class="elapsed">${el}</span></div>
     <div class="kv">
       <div><span class="k">الحافلة / المسار</span><b class="num">${esc(c.bus)}</b> / <span class="num">${esc(c.route)}</span></div>
       <div><span class="k">متجه إلى</span>${esc(c.dest)}</div>
-      <div><span class="k">الرقم الوظيفي للسائق</span><span class="num">${esc(c.driverId)}</span></div>
+      <div><span class="k">السائق</span>${c.driverName?esc(c.driverName)+' · ':''}<span class="num">${esc(c.driverId)}</span></div>
       <div><span class="k">جوال السائق</span>${phone?`<a class="num" href="tel:+966${esc(c.driverPhone)}">📞 ${esc(phone)}</a>`:'—'}</div>
       <div><span class="k">وقت البلاغ</span><span class="num">${fmtT(c.times.requested)}</span> · ${esc(c.opsName)}</div>
       <div><span class="k">المفتش</span>${c.inspector?esc(c.inspector.name):(c.status==='cancelled'?'—':'<span style="color:var(--bad)">لم يُستلم بعد</span>')}</div>
@@ -552,8 +557,20 @@ function act(id, a, btn){
   if(a==='cancel') return cancelBox(c);
   if(a==='transfer') return transferBox(c);
   if(a==='police') return policeBox(c);
+  if(a==='nx') return reasonBox(c, '🗃 إغلاق بلاغ لم يُستلم', 'البلاغ بيتقفل ويتسجل «أُغلق دون استلام» باسمك.', NX_REASONS, true, 'closeUnattended', 'تم إغلاق البلاغ دون استلام');
+  if(a==='uc') return reasonBox(c, '📵 تعذر التواصل مع السائق', 'بعد 3 محاولات تواصل فاشلة. الحالة بتتقفل بهذي النتيجة.', UC_REASONS, false, 'closeUnreachable', 'تم إغلاق الحالة: تعذر التواصل');
   const tAct = {tAccept:['transferAccept','✅ الحالة صارت معك'], tDecline:['transferDecline','تم رفض التحويل'], tCancel:['transferCancel','تم إلغاء التحويل']}[a];
   if(tAct) return run(btn, async()=>{ const n = await api(tAct[0],{id}); upsert(n); render(); toast(tAct[1]); });
+}
+function reasonBox(c, title, sub, reasons, withNote, action, done){
+  const keys = Object.keys(reasons);
+  modal(`<h3>${esc(c.caseNo)} · ${title}</h3><div class="sub">${sub}</div>
+    <div id="rl">${keys.map((k,i)=>`<label class="opt ${i===0?'on':''}"><input type="radio" name="r" value="${k}" ${i===0?'checked':''}> ${esc(reasons[k])}</label>`).join('')}</div>
+    ${withNote?`<label class="f" style="margin-top:8px">ملاحظة (اختياري)<input id="rn"></label>`:''}
+    <div class="row" style="margin-top:12px"><button class="btn pri" id="ok">إغلاق الحالة</button><button class="btn" data-x>رجوع</button></div>`,
+  ov=>{ ov.querySelectorAll('#rl input').forEach(i=>i.onchange=()=>ov.querySelectorAll('#rl .opt').forEach(l=>l.classList.toggle('on', l.querySelector('input').checked)));
+    const ok=ov.querySelector('#ok');
+    ok.onclick=()=>run(ok, async()=>{ const n=await api(action,{id:c.id, reason:ov.querySelector('#rl input:checked').value, note:(ov.querySelector('#rn')||{}).value||''}); upsert(n); closeModal(); render(); notify(waUpdate(n,'closed'), `${n.caseNo} · ${done}`); }); });
 }
 function policeBox(c){
   modal(`<h3>${esc(c.caseNo)} · رقم بلاغ الشرطة</h3><div class="sub">الصق رسالة الشرطة زي ما هي، والنظام ياخذ الرقم اللي بين القوسين.</div>
@@ -786,7 +803,7 @@ async function renderCaseReport(id){
       <div><div class="k">رقم المسار</div><div class="v num">${esc(c.route)}</div></div>
       <div><div class="k">مرحّل العمليات</div><div class="v">${esc(c.opsName)}</div></div>
       <div><div class="k">متجه إلى</div><div class="v">${esc(c.dest)}</div></div>
-      <div><div class="k">الرقم الوظيفي للسائق</div><div class="v num">${esc(c.driverId||'—')}</div></div>
+      <div><div class="k">السائق</div><div class="v">${c.driverName?esc(c.driverName)+' · ':''}<span class="num">${esc(c.driverId||'—')}</span></div></div>
       <div><div class="k">موقع المحطة</div><div class="v">${c.stationUrl?`<a href="${esc(c.stationUrl)}" target="_blank" rel="noopener">${esc(c.stationName||c.dest)}</a>`:'—'}</div></div>
       <div><div class="k">جوال السائق</div><div class="v num">${c.driverPhone?'0'+esc(c.driverPhone):'—'}</div></div>
       <div><div class="k">عدد الركاب</div><div class="v num">${c.passengers||1}</div></div>
@@ -815,14 +832,14 @@ async function renderDaily(){
     try{ S.dayData = await api('day',{date:day}); }catch(e){ $('#app').innerHTML=`<div class="empty">${esc(e.message)}</div>`; return; }
     if(current!=='daily') return;
   }
-  const L = S.dayData.cases.filter(c=>c.status!=='cancelled').sort((a,b)=>a.times.requested-b.times.requested);
-  const cancelled = S.dayData.cases.length - L.length;
+  const L = S.dayData.cases.filter(c=>c.status!=='cancelled' && !c.isTest).sort((a,b)=>a.times.requested-b.times.requested);
+  const cancelled = S.dayData.cases.filter(c=>c.status==='cancelled' && !c.isTest).length;
   const closed = L.filter(c=>c.status==='closed');
   const remote = closed.filter(c=>c.remote);
   const fines = L.filter(c=>c.outcomes.includes('fine')).length;
   const aAcc = avg(L.map(c=>mins(c.times.requested,c.times.accepted)));
   const aArr = avg(L.map(c=>mins(c.times.requested,c.times.arrived)));
-  const aCls = avg(closed.map(c=>mins(c.times.requested,c.times.closed)));
+  const aCls = avg(closed.filter(c=>!c.outcomes.includes('not_taken')).map(c=>mins(c.times.requested,c.times.closed)));
   const outCounts = OUTCOMES.map(o=>({o, n:L.filter(c=>c.outcomes.includes(o.k)).length}));
   const maxO = Math.max(1,...outCounts.map(x=>x.n));
   const group = (keyFn) => { const m={}; L.forEach(c=>{ const k=keyFn(c); if(k==null) return; (m[k]=m[k]||[]).push(c); }); return Object.entries(m).sort((a,b)=>b[1].length-a[1].length); };
