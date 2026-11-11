@@ -701,28 +701,47 @@ function cancelBox(c){
 }
 
 /* ================= new report ================= */
-function parseMsg(txt){
-  const out = {}; const lines = arDigits(txt).split(/\r?\n/);
-  for(const raw of lines){
-    const line = raw.replace(/[‎‏*_]/g,'').trim(); const i = line.indexOf(':'); if(i<0) continue;
-    const k = line.slice(0,i).trim(), v = line.slice(i+1).trim();
-    if(/^رقم الحافلة/.test(k)) out.bus=v.toUpperCase();
-    else if(/^الحالة/.test(k)) out.type=v;
-    else if(/^رقم المسار/.test(k)) out.route=v;
-    else if(/^متجه/.test(k)) out.dest=v;
-    else if(/^موقع المحطة/.test(k)){ out.stationUrl=(v.match(/https?:\/\/\S+/)||[v])[0]; const n=k.split(/\s[-–]\s|-/).slice(1).join('-').trim(); if(n) out.stationName=n; }
-    else if(/^الرقم الوظيفي/.test(k)) out.driverId=v;
-    else if(/^رقم الجوال|^الجوال/.test(k)) out.driverPhone=v.replace(/\D/g,'').replace(/^(966|0)/,'');
-    else if(/^مر[حّ]+ل العمليات/.test(k)) out.opsName=v;
-  }
-  if(!out.stationName && out.dest) out.stationName=out.dest;
+function parseMsg(txt) {
+  const out = {};
+  const clean = arDigits(txt).replace(/[‎‏‪-‮⁦-⁩*_~`]/g, '').replace(/[   ]/g, ' ').replace(/[：﹕]/g, ':');
+  if (/ركاب بدون تذاكر/.test(clean)) out.type = 'ركاب بدون تذاكر';
+  clean.split(/\r?\n/).forEach(function (rawLine) {
+    rawLine.split('|').forEach(function (seg) {
+      const line = seg.trim();
+      if (!line) return;
+      if (/^https?:\/\//.test(line)) { if (!out.stationUrl) out.stationUrl = line.split(/\s/)[0]; return; }
+      const i = line.indexOf(':'); if (i < 0) return;
+      const k = line.slice(0, i).replace(/^[^؀-ۿA-Za-z0-9]+/, '').replace(/\s+/g, ' ').trim();
+      const v = line.slice(i + 1).trim();
+      const url = (v.match(/https?:\/\/\S+/) || [])[0];
+      if (/^رقم الحافلة|^الحافلة/.test(k)) out.bus = v.split(/\s/)[0].toUpperCase();
+      else if (/^رقم المسار|^المسار/.test(k)) out.route = v.split(/\s/)[0];
+      else if (/^نوع الحالة|^الحالة/.test(k)) out.type = v;
+      else if (/^متجه/.test(k)) out.dest = v;
+      else if (/^رقم الجوال|^الجوال|^جوال السائق/.test(k)) out.driverPhone = v;
+      else if (/^الرقم الوظيفي/.test(k)) out.driverId = (v.match(/\d+/) || [v])[0];
+      else if (/^اسم السائق|^السائق/.test(k)) {
+        const m = v.match(/^(.*?)\s*[(\[]\s*(\d+)\s*[)\]]\s*$/);
+        if (m) { if (m[1].trim()) out.driverName = m[1].trim(); if (!out.driverId) out.driverId = m[2]; }
+        else if (/^\d+$/.test(v)) { if (!out.driverId) out.driverId = v; }
+        else out.driverName = v;
+      }
+      else if (/^مر[حّ]+ل العمليات|^المرحل/.test(k)) out.opsName = v.replace(/\s*[(\[]\s*CDC\s*[)\]]\s*$/i, '').trim();
+      else if (url) {                                   // سطر المحطة: «موقع المحطة - X: رابط» أو «X: رابط»
+        out.stationUrl = url;
+        const n = k.replace(/^موقع المحطة\s*[-–—]?\s*/, '').trim();
+        if (n && n !== 'موقع المحطة') out.stationName = n;
+      }
+    });
+  });
+  if (!out.stationName && out.dest) out.stationName = out.dest;
   return out;
 }
 const FIELDS = [
   ['bus','رقم الحافلة *','MA1019'],['route','رقم المسار *','10'],
   ['dest','متجه إلى','شارع الحج (130)'],['stationName','اسم المحطة','شارع الحج (130)'],
   ['stationUrl','رابط موقع المحطة','https://cdc-ops.github.io/cdc-ops/#s=…'],['type','نوع الحالة','ركاب بدون تذاكر'],
-  ['driverId','الرقم الوظيفي للسائق','11483'],['driverPhone','جوال السائق *','582601767'],
+  ['driverId','الرقم الوظيفي للسائق','11483'],['driverPhone','جوال السائق *','582601767'],['driverName','اسم السائق','Amir Khan'],
   ['opsName','مرحّل العمليات','']
 ];
 function renderNew(){
